@@ -1,0 +1,6 @@
+fastapi==0.104.1
+yt-dlp==2023.12.30
+uvicorn[standard]==0.24.0
+pydantic==2.8.2
+sqlalchemy==1.4.53
+python-multipart==0.0.6

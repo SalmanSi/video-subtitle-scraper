@@ -1,0 +1,34 @@
+{
+  "name": "video-subtitle-scraper-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for the Video Subtitle Scraper Application",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "axios": "^1.6.0",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "styled-jsx": "^5.1.7",
+    "typescript": "latest"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "eslint-config-next": "latest"
+  },
+  "keywords": [
+    "video",
+    "subtitle",
+    "scraper",
+    "frontend"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

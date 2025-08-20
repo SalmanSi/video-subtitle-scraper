@@ -1,0 +1,36 @@
+Here are the contents for the `/video-subtitle-scraper/docker-compose.yml` file:
+
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend/src:/app/src
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///app/db/database.db
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./frontend/app:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  db:
+    image: nouchka/sqlite3
+    volumes:
+      - db_data:/data/db
+
+volumes:
+  db_data:
