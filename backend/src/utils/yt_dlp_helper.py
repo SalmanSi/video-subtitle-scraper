@@ -229,23 +229,80 @@ def _process_subtitle_content(raw_content: str, format_type: str) -> str:
     try:
         if format_type == 'json3':
             # Parse JSON3 format (YouTube's native format)
-            subtitle_data = json.loads(raw_content)
-            if 'events' in subtitle_data:
+            try:
+                subtitle_data = json.loads(raw_content)
+                logging.debug(f"JSON3 structure keys: {subtitle_data.keys()}")
+                
                 text_parts = []
-                for event in subtitle_data['events']:
-                    if 'segs' in event:
-                        for seg in event['segs']:
-                            if 'utf8' in seg:
-                                # Clean up text and add spacing
-                                text = seg['utf8'].strip()
-                                if text:
+                
+                # Handle different JSON3 structures
+                if 'events' in subtitle_data:
+                    for event in subtitle_data['events']:
+                        if 'segs' in event:
+                            for seg in event['segs']:
+                                if 'utf8' in seg:
+                                    text = seg['utf8'].strip()
+                                    if text and text not in ['\n', ' ', '']:
+                                        text_parts.append(text)
+                        elif 'dDurationMs' in event and 'tStartMs' in event:
+                            # Handle events without segments but with text
+                            if 'wsWinStyles' in event or 'wWinStyles' in event:
+                                # Look for text in different possible locations
+                                for key in ['aAppend', 'segs']:
+                                    if key in event:
+                                        if isinstance(event[key], list):
+                                            for item in event[key]:
+                                                if isinstance(item, dict) and 'utf8' in item:
+                                                    text = item['utf8'].strip()
+                                                    if text and text not in ['\n', ' ', '']:
+                                                        text_parts.append(text)
+                
+                # Alternative structure: look for 'body' or 'transcript'
+                elif 'body' in subtitle_data:
+                    if isinstance(subtitle_data['body'], list):
+                        for item in subtitle_data['body']:
+                            if isinstance(item, dict) and 'utf8' in item:
+                                text = item['utf8'].strip()
+                                if text and text not in ['\n', ' ', '']:
                                     text_parts.append(text)
                 
-                # Join with spaces and clean up
-                content = ' '.join(text_parts)
-                # Remove excessive whitespace and normalize
-                content = re.sub(r'\s+', ' ', content)
-                return content.strip()
+                # Another alternative: direct array of text items
+                elif isinstance(subtitle_data, list):
+                    for item in subtitle_data:
+                        if isinstance(item, dict):
+                            if 'utf8' in item:
+                                text = item['utf8'].strip()
+                                if text and text not in ['\n', ' ', '']:
+                                    text_parts.append(text)
+                            elif 'text' in item:
+                                text = item['text'].strip()
+                                if text and text not in ['\n', ' ', '']:
+                                    text_parts.append(text)
+                
+                # Join and clean up
+                if text_parts:
+                    content = ' '.join(text_parts)
+                    # Remove excessive whitespace and normalize
+                    content = re.sub(r'\s+', ' ', content)
+                    content = content.strip()
+                    logging.debug(f"Extracted {len(content)} characters from JSON3")
+                    return content
+                else:
+                    logging.warning("No text segments found in JSON3 structure")
+                    logging.debug(f"JSON3 sample: {str(subtitle_data)[:500]}...")
+                    return ""
+                    
+            except json.JSONDecodeError as e:
+                logging.error(f"Failed to parse JSON3: {e}")
+                # Try to extract any text using regex as fallback
+                text_matches = re.findall(r'"utf8"\s*:\s*"([^"]*)"', raw_content)
+                if text_matches:
+                    content = ' '.join(match.strip() for match in text_matches if match.strip())
+                    content = re.sub(r'\s+', ' ', content).strip()
+                    if content:
+                        logging.info(f"Fallback regex extraction successful: {len(content)} characters")
+                        return content
+                return ""
         
         elif format_type in ['vtt', 'webvtt']:
             # Process WebVTT format
@@ -487,7 +544,26 @@ def extract_single_video_subtitles(video_url: str,
                 # Rate limiting options
                 'sleep_interval': 1,
                 'max_sleep_interval': 5,
-                'sleep_interval_subtitles': 1
+                'sleep_interval_subtitles': 1,
+                # Anti-bot measures for 2025.08.12
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['android', 'web'],
+                        'player_skip': ['webpage'],
+                        'comment_sort': ['top'],
+                        'max_comments': ['100,100,100,100']
+                    }
+                },
+                # Additional headers and user agent rotation
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Accept-Encoding': 'gzip,deflate',
+                    'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                    'Keep-Alive': '300',
+                    'Connection': 'keep-alive',
+                }
             }
             
             logging.info(f"Extracting subtitle info for {video_url} (attempt {attempt + 1})")
