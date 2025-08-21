@@ -59,13 +59,35 @@ class SubtitleProcessor:
         try:
             log('INFO', f"Processing subtitles for video {video.id}: {video.title}", video.id)
             
-            # Extract subtitle text
+            # Extract subtitle text using improved function with auto-generated support
+            from utils.yt_dlp_helper import extract_single_video_subtitles
+            
             preferred_langs = self.settings['preferred_languages']
-            lang, content = fetch_subtitle_text(video.url, preferred_langs)
+            
+            # Use the improved function that supports auto-generated subtitles
+            result = extract_single_video_subtitles(
+                video_url=video.url,
+                preferred_langs=preferred_langs,
+                include_auto_generated=True,  # Always include auto-generated subtitles
+                max_retries=self.settings['max_retries'],
+                base_delay=1.0
+            )
+            
+            if not result['success']:
+                if result['is_transient_error']:
+                    error_msg = f"Transient error: {result['error']}"
+                    raise TransientError(error_msg)
+                else:
+                    error_msg = f"Permanent error: {result['error']}"
+                    raise PermanentError(error_msg)
+            
+            # Extract the results
+            lang = result['language']
+            content = result['content']
             
             if not lang or not content:
                 # No subtitles available - this is a permanent error
-                error_msg = 'No native subtitles available'
+                error_msg = 'No subtitles (native or auto-generated) available'
                 raise PermanentError(error_msg)
             
             # Save subtitle to database
@@ -76,7 +98,10 @@ class SubtitleProcessor:
             
             # Mark video as completed
             self._mark_video_completed(video)
-            log('INFO', f'Successfully extracted {lang} subtitles ({len(content)} characters)', video.id)
+            
+            is_auto = result.get('is_auto_generated', False)
+            subtitle_type = 'auto-generated' if is_auto else 'native'
+            log('INFO', f'Successfully extracted {lang} {subtitle_type} subtitles ({len(content)} characters)', video.id)
             
             return True
             
