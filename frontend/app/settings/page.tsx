@@ -28,7 +28,7 @@ const SettingsPage: React.FC = () => {
   const [serverError, setServerError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004').replace(/\/$/, '');
+  const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);

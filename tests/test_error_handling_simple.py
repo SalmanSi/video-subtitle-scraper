@@ -70,7 +70,7 @@ def test_api_integration():
     
     try:
         # Test that logs endpoint exists
-        response = requests.get("http://localhost:8004/api/jobs/logs", timeout=5)
+        response = requests.get("http://localhost:8000/api/jobs/logs", timeout=5)
         if response.status_code == 200:
             logs = response.json()
             print(f"✅ Logs API working: {logs.get('total', 0)} logs found")

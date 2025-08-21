@@ -32,7 +32,7 @@ const ChannelDetails = () => {
 
     const fetchChannelDetails = async (channelId: string) => {
         try {
-            const base = process.env.NEXT_PUBLIC_API_URL;
+            const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
             const url = base ? `${base}/api/channels/${channelId}` : `/api/channels/${channelId}`;
             const response = await axios.get(url);
             setChannel(response.data);

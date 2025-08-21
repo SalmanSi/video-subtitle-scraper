@@ -43,7 +43,7 @@ const OnboardingPage: React.FC = () => {
   const [summary, setSummary] = useState<{added:number; exists:number; errors:number}>({added:0, exists:0, errors:0});
   const [addedChannelIds, setAddedChannelIds] = useState<number[]>([]);
 
-  const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004').replace(/\/$/, '');
+  const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
   const validateUrl = (url: string) => {
     const trimmed = url.trim();

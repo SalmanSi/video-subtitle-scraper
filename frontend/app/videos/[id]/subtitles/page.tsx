@@ -58,7 +58,7 @@ const VideoSubtitlesPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL;
+      const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const url = base ? `${base}/api/subtitles/videos/${id}` : `/api/subtitles/videos/${id}`;
       const res = await axios.get(url);
       setData(res.data);
@@ -71,7 +71,7 @@ const VideoSubtitlesPage: React.FC = () => {
   };
 
   const downloadSubtitle = (subtitleId: number) => {
-    const base = process.env.NEXT_PUBLIC_API_URL;
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
     const url = base ? `${base}/api/subtitles/${subtitleId}/download` : `/api/subtitles/${subtitleId}/download`;
     window.open(url, '_blank');
   };

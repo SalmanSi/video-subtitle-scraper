@@ -7,7 +7,9 @@ const JobMonitor = () => {
     const [connectionStatus, setConnectionStatus] = useState('Connecting...');
 
     useEffect(() => {
-        const socket = new WebSocket('ws://localhost:8000/jobs/status');
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const wsUrl = apiUrl.replace('http:', 'ws:').replace('https:', 'wss:');
+        const socket = new WebSocket(`${wsUrl}/jobs/status`);
 
         socket.onopen = () => {
             setConnectionStatus('Connected');

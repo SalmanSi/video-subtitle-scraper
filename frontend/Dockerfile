@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci --only=production
 
 # Copy application source
 COPY . .
@@ -16,6 +16,8 @@ RUN npm run build
 
 # Expose port
 EXPOSE 3000
+
+ENV NODE_ENV=production
 
 # Command to run the application
 CMD ["npm", "start"]

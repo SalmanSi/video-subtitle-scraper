@@ -47,7 +47,7 @@ interface ExtractionResponse {
   };
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function SingleVideoIngestion() {
   const [videoUrl, setVideoUrl] = useState('');

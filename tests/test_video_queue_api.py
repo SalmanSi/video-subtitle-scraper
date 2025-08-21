@@ -5,7 +5,7 @@ Test script for VideoQueue API functionality
 import requests
 import json
 
-BASE_URL = "http://localhost:8004/api"
+BASE_URL = "http://localhost:8000/api"
 
 def test_channels_list():
     """Test listing all channels"""

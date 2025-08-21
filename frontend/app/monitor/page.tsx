@@ -39,12 +39,12 @@ const JobMonitor: React.FC = () => {
   const reconnectAttempts = useRef(0);
 
   const resolveBackendOrigin = () => {
-    if (typeof window === 'undefined') return 'http://localhost:8004';
+    if (typeof window === 'undefined') return 'http://localhost:8000';
     if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
-    // If we're on the Next dev server (likely port 3000), point to backend 8004
+    // If we're on the Next dev server (likely port 3000), point to backend 8000
     const { protocol, hostname, port } = window.location;
     if (port === '3000' || port === '') {
-      return `${protocol}//${hostname}:8004`;
+      return `${protocol}//${hostname}:8000`;
     }
     return `${protocol}//${window.location.host}`;
   };

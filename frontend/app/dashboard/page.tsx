@@ -38,7 +38,7 @@ const Dashboard: React.FC = () => {
     const fetchChannels = useCallback(async () => {
         try {
             setRefreshing(true);
-            const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004'}/api/channels/`);
+            const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/channels/`);
             setChannels(response.data);
             setError(null);
         } catch (err) {
@@ -96,7 +96,7 @@ const Dashboard: React.FC = () => {
         }
 
         try {
-            await axios.delete(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004'}/api/channels/${channelId}`);
+            await axios.delete(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/channels/${channelId}`);
             setChannels(prev => prev.filter(ch => ch.id !== channelId));
         } catch (err) {
             alert('Failed to delete channel. Please try again.');

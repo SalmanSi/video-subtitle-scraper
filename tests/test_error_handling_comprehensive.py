@@ -26,7 +26,7 @@ except ImportError as e:
     print(f"Backend modules not available for direct testing: {e}")
     BACKEND_AVAILABLE = False
 
-BASE_URL = "http://localhost:8004"
+BASE_URL = "http://localhost:8000"
 
 def test_api_endpoints():
     """Test error handling API endpoints"""
@@ -287,4 +287,4 @@ if __name__ == "__main__":
             print(f"❌ Backend not responding correctly: {response.status_code}")
     except requests.exceptions.RequestException as e:
         print(f"❌ Cannot connect to backend at {BASE_URL}: {e}")
-        print("   Please ensure the backend is running on port 8004")
+        print("   Please ensure the backend is running on port 8000")

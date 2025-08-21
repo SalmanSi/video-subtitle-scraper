@@ -31,11 +31,11 @@ const ChannelProgress: React.FC<ChannelProgressProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const resolveBackendOrigin = () => {
-    if (typeof window === 'undefined') return 'http://localhost:8004';
+    if (typeof window === 'undefined') return 'http://localhost:8000';
     if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
     const { protocol, hostname, port } = window.location;
     if (port === '3000' || port === '') {
-      return `${protocol}//${hostname}:8004`;
+      return `${protocol}//${hostname}:8000`;
     }
     return `${protocol}//${window.location.host}`;
   };

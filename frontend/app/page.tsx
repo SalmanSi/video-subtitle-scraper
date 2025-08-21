@@ -26,7 +26,7 @@ export default function HomePage() {
 
     const fetchChannels = async () => {
         try {
-            const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004'}/api/channels/`);
+            const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/channels/`);
             setChannels(response.data);
         } catch (err) {
             setError('Failed to fetch channels.');

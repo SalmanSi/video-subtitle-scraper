@@ -115,17 +115,130 @@ def get_db():
 
 def init_db():
     """Initialize database and create all tables"""
-    Base.metadata.create_all(bind=engine)
+    # Check if database file exists to determine if this is first run
+    db_exists = os.path.exists(DATABASE_PATH)
     
-    # Insert default settings if not exists
-    db = SessionLocal()
+    if not db_exists:
+        # For new database, execute the migration SQL file
+        _execute_migration_file()
+    else:
+        # For existing database, just create any new tables via SQLAlchemy
+        Base.metadata.create_all(bind=engine)
+        
+        # Insert default settings if not exists
+        db = SessionLocal()
+        try:
+            if not db.query(Setting).filter(Setting.id == 1).first():
+                default_settings = Setting(id=1)
+                db.add(default_settings)
+                db.commit()
+        finally:
+            db.close()
+
+def _execute_migration_file():
+    """Execute the initial migration SQL file"""
+    migration_file = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR))), 
+        "migrations", 
+        "init.sql"
+    )
+    
+    if os.path.exists(migration_file):
+        # Use raw SQLite connection to execute the migration
+        conn = sqlite3.connect(DATABASE_PATH)
+        try:
+            with open(migration_file, 'r') as f:
+                migration_sql = f.read()
+            
+            # Execute the migration in chunks (split by semicolon)
+            for statement in migration_sql.split(';'):
+                statement = statement.strip()
+                if statement:
+                    conn.execute(statement)
+            
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        # Fallback to SQLAlchemy if migration file not found
+        Base.metadata.create_all(bind=engine)
+        
+        # Insert default settings
+        db = SessionLocal()
+        try:
+            if not db.query(Setting).filter(Setting.id == 1).first():
+                default_settings = Setting(id=1)
+                db.add(default_settings)
+                db.commit()
+        finally:
+            db.close()
+
+def check_migration_status():
+    """Check which migrations have been applied"""
     try:
-        if not db.query(Setting).filter(Setting.id == 1).first():
-            default_settings = Setting(id=1)
-            db.add(default_settings)
-            db.commit()
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Check if migration table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='schema_migrations'
+        """)
+        
+        if cursor.fetchone():
+            # Get applied migrations
+            cursor.execute("SELECT version FROM schema_migrations ORDER BY applied_at")
+            applied_migrations = [row[0] for row in cursor.fetchall()]
+            return applied_migrations
+        else:
+            return []
+    except Exception:
+        return []
     finally:
-        db.close()
+        try:
+            conn.close()
+        except:
+            pass
+
+def apply_migration(version, sql_statements):
+    """Apply a specific migration"""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        
+        # Ensure schema_migrations table exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Check if migration already applied
+        cursor.execute("SELECT version FROM schema_migrations WHERE version = ?", (version,))
+        if cursor.fetchone():
+            return False  # Already applied
+        
+        # Apply migration statements
+        for statement in sql_statements:
+            statement = statement.strip()
+            if statement:
+                cursor.execute(statement)
+        
+        # Record migration as applied
+        cursor.execute(
+            "INSERT INTO schema_migrations(version) VALUES (?)", 
+            (version,)
+        )
+        
+        conn.commit()
+        return True  # Successfully applied
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def close_db():
     """Close database connections"""

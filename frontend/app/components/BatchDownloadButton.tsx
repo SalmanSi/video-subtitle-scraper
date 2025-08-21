@@ -26,7 +26,7 @@ const BatchDownloadButton: React.FC<BatchDownloadButtonProps> = ({
     setError('');
 
     try {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004'}/api/channels/${channelId}/subtitles/download`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/channels/${channelId}/subtitles/download`, {
         method: 'GET',
         headers: {
           'Accept': 'application/zip',

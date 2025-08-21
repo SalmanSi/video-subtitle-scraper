@@ -18,6 +18,13 @@ async def lifespan(app: FastAPI):
         models.init_db()
         log('INFO', "Database initialized successfully")
         
+        # Check migration status
+        applied_migrations = models.check_migration_status()
+        if applied_migrations:
+            log('INFO', f"Applied migrations: {', '.join(applied_migrations)}")
+        else:
+            log('INFO', "No migration tracking found (legacy database or first run)")
+        
         # Perform centralized startup recovery (resets processing videos and attempts)
         startup_recovery()
         
@@ -51,7 +58,12 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:3001",
+        "http://frontend:3000",  # Docker service name
+        "http://127.0.0.1:3000"  # Explicit localhost
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

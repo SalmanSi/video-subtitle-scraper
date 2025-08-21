@@ -60,3 +60,19 @@ CREATE TABLE settings (
     backoff_factor REAL DEFAULT 2.0,
     output_dir TEXT DEFAULT './subtitles'
 );
+
+-- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
+CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id);
+
+-- Insert default settings row
+INSERT OR IGNORE INTO settings(id) VALUES (1);
+
+-- Create migration tracking table for future schema changes
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Record this initial migration
+INSERT OR IGNORE INTO schema_migrations(version) VALUES ('001_initial_schema');
