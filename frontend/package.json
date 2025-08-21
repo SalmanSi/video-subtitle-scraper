@@ -7,8 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-  "lint": "eslint .",
-  "test:ui": "playwright test"
+    "lint": "eslint .",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@types/node": "latest",

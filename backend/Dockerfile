@@ -1,29 +1,33 @@
-# Dockerfile for Video Subtitle Scraper Backend
-
-# Use the official Python image from the Docker Hub
 FROM python:3.12-slim
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Install the required Python packages
+# Install system dependencies including curl for healthcheck
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install dependencies (for layer caching)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire backend source code into the container
+# Copy source code
 COPY src/ ./src/
+COPY data/ ./data/
 
-# Set the environment variable for Flask or FastAPI
-# Uncomment the appropriate line based on the framework used
-# ENV FLASK_APP=src/app.py
-# ENV FASTAPI_APP=src/app.py
+# Create data directory if it doesn't exist
+RUN mkdir -p ./data
 
-# Expose the port the app runs on
+# Expose port
 EXPOSE 8000
 
-# Command to run the application
-# Uncomment the appropriate line based on the framework used
-# CMD ["flask", "run", "--host=0.0.0.0"]
-# CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the application
+CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000"]

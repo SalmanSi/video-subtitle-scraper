@@ -2,7 +2,7 @@
   "/page": "app/page.js",
   "/dashboard/page": "app/dashboard/page.js",
   "/monitor/page": "app/monitor/page.js",
-  "/channels/[id]/page": "app/channels/[id]/page.js",
   "/videos/[id]/subtitles/page": "app/videos/[id]/subtitles/page.js",
-  "/individual/page": "app/individual/page.js"
+  "/individual/page": "app/individual/page.js",
+  "/settings/page": "app/settings/page.js"
 }

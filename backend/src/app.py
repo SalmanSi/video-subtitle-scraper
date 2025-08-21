@@ -63,20 +63,15 @@ app.include_router(videos.router, prefix="/api")
 app.include_router(subtitles.router, prefix="/api")
 app.include_router(jobs.router)
 
-# Include the routers for each API module
-app.include_router(channels.router, prefix="/api")
-app.include_router(videos.router, prefix="/api")
-app.include_router(subtitles.router, prefix="/api")
-app.include_router(jobs.router)
-
 @app.get("/")
 async def root():
     """Root endpoint"""
     return {"message": "Video Subtitle Scraper API", "status": "running"}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8004)
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker"""
+    return {"status": "healthy"}
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -87,16 +82,6 @@ def shutdown_event():
     except Exception as e:
         log_exception(None, e)
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {"message": "Video Subtitle Scraper API is running"}
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy"}
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8004)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,5 +1,3 @@
-# Contents of /video-subtitle-scraper/video-subtitle-scraper/README.md
-
 # Video Subtitle Scraper Application
 
 ## Overview
@@ -14,20 +12,61 @@ The Video Subtitle Scraper Application is designed to ingest YouTube channel URL
 - **User Interface**: A web-based UI allows users to manage channels, monitor jobs, view subtitles, and download them.
 
 ## Technology Stack
-- **Backend**: Python 3.12 with FastAPI or Flask
+- **Backend**: Python 3.12 with FastAPI
 - **Database**: SQLite 3
 - **Frontend**: Next.js
 - **Containerization**: Docker and Docker Compose
 
+## Quick Start (Docker) 🚀
+
+The fastest way to get the application running:
+
+```bash
+# Clone and navigate to the project
+git clone [repository-url]
+cd video-subtitle-scraper
+
+# Start the application
+./start.sh
+```
+
+The application will be available at:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Documentation**: http://localhost:8000/docs
+
 ## Getting Started
 
 ### Prerequisites
-- Python 3.12
-- Node.js (for frontend)
-- Docker and Docker Compose
+- Docker and Docker Compose (recommended)
+- Python 3.12 (for local development)
+- Node.js 20+ (for local development)
 
 ### Installation
-1. Clone the repository:
+
+#### Option 1: Docker (Recommended)
+```bash
+# Validate deployment setup
+./validate-deployment.sh
+
+# Start the application
+docker-compose up --build
+```
+
+#### Option 2: Local Development
+```bash
+# Setup development environment
+./dev-setup.sh
+
+# Start backend (terminal 1)
+cd backend
+source .venv/bin/activate
+uvicorn src.app:app --reload --host 0.0.0.0 --port 8000
+
+# Start frontend (terminal 2)
+cd frontend
+npm run dev
+```
    ```
    git clone <repository-url>
    cd video-subtitle-scraper
