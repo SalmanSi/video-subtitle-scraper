@@ -1,7 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from api import channels, videos, subtitles, jobs
 from db import models
-from utils.queue_manager import reset_processing_videos, reconcile_video_statuses
+from utils.queue_manager import reconcile_video_statuses
+from utils.error_handler import startup_recovery, log, log_exception
 import logging
 
 # Configure logging
@@ -11,6 +13,15 @@ app = FastAPI(
     title="Video Subtitle Scraper API",
     description="API for scraping subtitles from YouTube videos",
     version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include the routers for each API module
@@ -25,28 +36,24 @@ def startup_event():
     try:
         # Initialize database
         models.init_db()
-        logging.info("Database initialized successfully")
+        log('INFO', "Database initialized successfully")
         
-        # Recover queue state after startup
+        # Perform centralized startup recovery (resets processing videos and attempts)
+        startup_recovery()
+        
+        # Reconcile video statuses with actual subtitle data
         db = models.SessionLocal()
         try:
-            # Reset any videos that were stuck in 'processing' state
-            reset_count = reset_processing_videos(db)
-            if reset_count > 0:
-                logging.info(f"Queue recovery: Reset {reset_count} processing videos to pending")
-            
-            # Reconcile video statuses with actual subtitle data
             reconcile_results = reconcile_video_statuses(db)
             if reconcile_results['completed'] > 0:
-                logging.info(f"Queue reconciliation: Marked {reconcile_results['completed']} videos as completed")
-                
+                log('INFO', f"Queue reconciliation: Marked {reconcile_results['completed']} videos as completed")
         finally:
             db.close()
             
-        logging.info("Queue recovery and reconciliation completed")
+        log('INFO', "Application startup and recovery completed")
         
     except Exception as e:
-        logging.error(f"Failed to initialize application: {e}")
+        log_exception(None, e)
         raise
 
 @app.on_event("shutdown")
@@ -54,9 +61,9 @@ def shutdown_event():
     """Cleanup resources if necessary"""
     try:
         models.close_db()
-        logging.info("Database connections closed")
+        log('INFO', "Database connections closed")
     except Exception as e:
-        logging.error(f"Error during shutdown: {e}")
+        log_exception(None, e)
 
 @app.get("/")
 async def root():

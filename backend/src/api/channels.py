@@ -19,6 +19,7 @@ from utils.yt_dlp_helper import (
     log_error
 )
 from utils.queue_manager import get_channel_statistics
+from sqlalchemy import desc
 
 router = APIRouter(prefix="/channels", tags=["channels"])
 
@@ -266,6 +267,36 @@ async def list_channels(db: Session = Depends(get_db)):
         logging.error(f"Failed to list channels: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve channels")
 
+@router.get("/{channel_id}", response_model=ChannelOutput)
+async def get_channel(channel_id: int, db: Session = Depends(get_db)):
+    """Get details for a specific channel"""
+    try:
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        
+        # Get channel statistics
+        stats = get_channel_statistics(db, channel_id)
+        
+        return ChannelOutput(
+            id=channel.id,
+            url=channel.url,
+            name=channel.name or "Unknown Channel",
+            total_videos=stats.get('total', 0),
+            pending=stats.get('pending', 0),
+            processing=stats.get('processing', 0),
+            completed=stats.get('completed', 0),
+            failed=stats.get('failed', 0),
+            created_at=channel.created_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to get channel {channel_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve channel")
+
+
 @router.delete("/{channel_id}")
 async def delete_channel(channel_id: int, db: Session = Depends(get_db)):
     """
@@ -344,53 +375,33 @@ async def download_channel_subtitles(channel_id: int, db: Session = Depends(get_
         background=cleanup  # Clean up temp file after download
     )
 
-@router.get("/{channel_id}/subtitles/download")
-async def download_channel_subtitles(channel_id: int, db: Session = Depends(get_db)):
-    """Download all completed subtitles for a channel as ZIP file"""
+class ChannelVideosResponse(BaseModel):
+    videos: List[dict]
+    total: int
+    status_counts: dict
+
+@router.get("/{channel_id}/videos", response_model=ChannelVideosResponse)
+async def list_channel_videos(channel_id: int, db: Session = Depends(get_db)):
+    """List videos for a channel (compat endpoint for frontend)."""
     channel = db.query(Channel).filter(Channel.id == channel_id).first()
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    
-    # Get all completed videos with subtitles for this channel
-    videos_with_subtitles = db.query(Video).filter(
-        Video.channel_id == channel_id,
-        Video.status == 'completed'
-    ).join(Subtitle).all()
-    
-    if not videos_with_subtitles:
-        raise HTTPException(status_code=404, detail="No completed videos with subtitles found for this channel")
-    
-    # Create temporary file for the ZIP
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
-        with zipfile.ZipFile(tmp_file, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for video in videos_with_subtitles:
-                subtitles = db.query(Subtitle).filter(Subtitle.video_id == video.id).all()
-                
-                # Clean video title for folder/filename
-                safe_title = "".join(c for c in video.title if c.isalnum() or c in (' ', '-', '_')).strip()
-                safe_title = safe_title[:80]  # Truncate to avoid long filenames
-                
-                for subtitle in subtitles:
-                    # Create filename with video ID to ensure uniqueness
-                    filename = f"{video.id}_{safe_title}_{subtitle.language}.txt"
-                    zip_file.writestr(filename, subtitle.content.encode('utf-8'))
-        
-        tmp_file_path = tmp_file.name
-    
-    # Clean channel name for ZIP filename
-    safe_channel_name = "".join(c for c in (channel.name or f"channel-{channel_id}") if c.isalnum() or c in (' ', '-', '_')).strip()
-    zip_filename = f"{safe_channel_name}-subtitles.zip"
-    
-    def cleanup():
-        """Clean up temporary file after response"""
-        try:
-            os.unlink(tmp_file_path)
-        except:
-            pass
-    
-    return FileResponse(
-        path=tmp_file_path,
-        filename=zip_filename,
-        media_type="application/zip",
-        background=cleanup  # Clean up temp file after download
-    )
+    try:
+        videos = db.query(Video).filter(Video.channel_id == channel_id).order_by(desc(Video.id)).all()
+        stats = get_channel_statistics(db, channel_id)
+        video_dicts = []
+        for v in videos:
+            video_dicts.append({
+                'id': v.id,
+                'channel_id': v.channel_id,
+                'url': v.url,
+                'title': v.title,
+                'status': v.status,
+                'attempts': v.attempts,
+                'last_error': getattr(v, 'last_error', None),
+                'completed_at': v.completed_at,
+                'created_at': v.created_at
+            })
+        return ChannelVideosResponse(videos=video_dicts, total=len(video_dicts), status_counts=stats)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list channel videos: {e}")

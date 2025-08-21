@@ -2,6 +2,8 @@
 Worker Module for Task 1-4 Parallel Scraping
 Handles N concurrent workers with atomic job claiming, retry logic with exponential backoff, 
 and graceful shutdown according to TRD Section 1.4.
+
+Enhanced with centralized error handling from Task 1-7.
 """
 
 import os
@@ -22,6 +24,11 @@ from sqlalchemy.orm import Session
 from db.models import SessionLocal, Video, Setting, Log, get_db
 from utils.queue_manager import claim_next_video, release_video, reset_processing_videos
 from utils.subtitle_processor import process_video_subtitles
+from utils.error_handler import (
+    log, log_exception, handle_worker_exception, 
+    TransientError, PermanentError, startup_recovery,
+    classify_yt_dlp_error
+)
 
 # Configure logging
 logging.basicConfig(
@@ -32,14 +39,6 @@ logger = logging.getLogger(__name__)
 
 # Global stop event for graceful shutdown
 STOP_EVENT = threading.Event()
-
-class TransientError(Exception):
-    """Errors that should be retried with exponential backoff"""
-    pass
-
-class PermanentError(Exception):
-    """Errors that should not be retried"""
-    pass
 
 class SubtitleWorker:
     """Individual worker for processing video subtitles with enhanced error handling and backoff"""
@@ -56,55 +55,15 @@ class SubtitleWorker:
     def stop(self):
         """Stop the worker gracefully"""
         self.running = False
-        logger.info(f"Worker {self.worker_id} stopping...")
+        log('INFO', f"Worker {self.worker_id} stopping...")
     
     def get_retry_delay(self, attempts: int, backoff_factor: float) -> float:
         """Calculate exponential backoff delay"""
         return min(backoff_factor ** attempts, 300)  # Cap at 5 minutes
     
-    def classify_error(self, error: Exception) -> bool:
-        """
-        Classify error as transient (retry) or permanent (fail).
-        Returns True for transient errors, False for permanent errors.
-        """
-        error_str = str(error).lower()
-        
-        # Permanent errors - don't retry
-        permanent_indicators = [
-            'no subtitles available',
-            'video unavailable',
-            'private video',
-            'deleted video',
-            'not found',
-            'access denied',
-            'forbidden'
-        ]
-        
-        for indicator in permanent_indicators:
-            if indicator in error_str:
-                return False
-                
-        # Transient errors - retry with backoff
-        transient_indicators = [
-            'timeout',
-            'connection',
-            'network',
-            'temporary',
-            'rate limit',
-            'too many requests',
-            'service unavailable'
-        ]
-        
-        for indicator in transient_indicators:
-            if indicator in error_str:
-                return True
-                
-        # Default to transient for unknown errors
-        return True
-    
     def run(self):
-        """Enhanced worker loop with exponential backoff and graceful shutdown"""
-        logger.info(f"Worker {self.worker_id} started")
+        """Enhanced worker loop with centralized error handling"""
+        log('INFO', f"Worker {self.worker_id} started")
         
         while self.running and not STOP_EVENT.is_set():
             db = SessionLocal()
@@ -124,56 +83,63 @@ class SubtitleWorker:
                 # Get video details
                 video = db.query(Video).filter(Video.id == video_id).first()
                 if not video:
-                    logger.error(f"Worker {self.worker_id}: Video {video_id} not found")
+                    log('ERROR', f"Worker {self.worker_id}: Video {video_id} not found")
                     db.close()
                     continue
                 
-                logger.info(f"Worker {self.worker_id} processing video {video_id}: {video.title}")
-                
-                # Get settings for retry configuration
-                settings = db.query(Setting).filter(Setting.id == 1).first()
-                max_retries = settings.max_retries if settings else 3
-                backoff_factor = settings.backoff_factor if settings else 2.0
+                log('INFO', f"Worker {self.worker_id} processing video {video_id}: {video.title}")
                 
                 try:
                     # Process subtitles (close DB connection during network operations)
                     db.close()
                     
                     # This may take a while, so we release the DB connection
-                    success = self.process_video_with_retry(video_id, max_retries, backoff_factor)
-                    
-                    # Reconnect to update status
-                    db = SessionLocal()
+                    success = self.process_video_safely(video_id)
                     
                     if success:
                         self.processed_count += 1
-                        logger.info(f"Worker {self.worker_id} completed video {video_id}")
+                        log('INFO', f"Worker {self.worker_id} completed video {video_id}")
                     else:
                         self.failed_count += 1
-                        logger.warning(f"Worker {self.worker_id} failed to process video {video_id}")
                         
                 except Exception as e:
-                    logger.error(f"Worker {self.worker_id} unexpected error: {str(e)}")
-                    # Reconnect if needed
-                    if db.is_active:
-                        db.close()
-                    db = SessionLocal()
-                    release_video(db, video_id, 'failed', f"Unexpected worker error: {str(e)}")
+                    # Use centralized exception handling
+                    action = handle_worker_exception(video_id, e)
                     self.failed_count += 1
+                    log('ERROR', f"Worker {self.worker_id} error (action: {action}): {str(e)}", video_id)
                 
             except Exception as e:
-                logger.error(f"Worker {self.worker_id} critical error: {str(e)}")
+                log('ERROR', f"Worker {self.worker_id} critical error: {str(e)}")
                 if 'video_id' in locals() and video_id:
                     try:
+                        # Reconnect if needed for cleanup
+                        if not db.is_active:
+                            db = SessionLocal()
                         release_video(db, video_id, 'failed', f"Critical worker error: {str(e)}")
-                    except:
-                        pass
+                    except Exception as cleanup_error:
+                        log_exception(video_id, cleanup_error)
             finally:
                 self.current_video_id = None
                 if db.is_active:
                     db.close()
         
-        logger.info(f"Worker {self.worker_id} stopped. Processed: {self.processed_count}, Failed: {self.failed_count}")
+        log('INFO', f"Worker {self.worker_id} stopped. Processed: {self.processed_count}, Failed: {self.failed_count}")
+    
+    def process_video_safely(self, video_id: int) -> bool:
+        """Process video with proper exception classification and handling"""
+        try:
+            # Process the video subtitles
+            success = process_video_subtitles_standalone(video_id)
+            return success
+            
+        except Exception as e:
+            # Classify the error and raise appropriate exception type
+            error_class = classify_yt_dlp_error(str(e))
+            
+            if error_class == PermanentError:
+                raise PermanentError(str(e)) from e
+            else:
+                raise TransientError(str(e)) from e
     
     def process_video_with_retry(self, video_id: int, max_retries: int, backoff_factor: float) -> bool:
         """Process video with built-in retry logic and exponential backoff"""
@@ -292,26 +258,13 @@ class WorkerManager:
         if self.startup_recovery_done:
             return
             
-        logger.info("Performing startup recovery...")
-        db = SessionLocal()
+        log('INFO', "Performing startup recovery...")
         try:
-            reset_count = reset_processing_videos(db)
-            if reset_count > 0:
-                logger.info(f"Startup recovery: Reset {reset_count} stuck videos to pending")
-                
-                # Log the recovery
-                log_entry = Log(
-                    video_id=None,
-                    level='INFO',
-                    message=f"Startup recovery: Reset {reset_count} processing videos to pending",
-                    timestamp=datetime.utcnow()
-                )
-                db.add(log_entry)
-                db.commit()
+            # Use centralized startup recovery
+            startup_recovery()
         except Exception as e:
-            logger.error(f"Startup recovery failed: {e}")
+            log_exception(None, e)
         finally:
-            db.close()
             self.startup_recovery_done = True
     
     def start(self):

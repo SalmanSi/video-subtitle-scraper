@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+  "lint": "eslint .",
+  "test:ui": "playwright test"
   },
   "dependencies": {
     "@types/node": "latest",
@@ -21,7 +22,8 @@
   },
   "devDependencies": {
     "eslint": "^8.0.0",
-    "eslint-config-next": "latest"
+    "eslint-config-next": "latest",
+    "@playwright/test": "^1.46.0"
   },
   "keywords": [
     "video",

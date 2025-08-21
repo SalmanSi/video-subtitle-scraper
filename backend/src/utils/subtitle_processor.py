@@ -1,6 +1,8 @@
 """
 Subtitle Processing Module for Task 1-3
 Handles video subtitle extraction, processing, and database operations
+
+Enhanced with centralized error handling from Task 1-7.
 """
 
 import logging
@@ -12,6 +14,10 @@ from sqlalchemy.exc import IntegrityError
 from db.models import Video, Subtitle, Log, Setting
 from utils.yt_dlp_helper import fetch_subtitle_text, is_transient_error
 from utils.queue_manager import release_video
+from utils.error_handler import (
+    log, log_exception, TransientError, PermanentError, 
+    classify_yt_dlp_error
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -42,7 +48,7 @@ class SubtitleProcessor:
     
     def process_video_subtitles(self, video: Video) -> bool:
         """
-        Process subtitles for a single video.
+        Process subtitles for a single video with centralized error handling.
         
         Args:
             video: Video object to process
@@ -51,52 +57,41 @@ class SubtitleProcessor:
             True if successful, False if failed
         """
         try:
-            logger.info(f"Processing subtitles for video {video.id}: {video.title}")
+            log('INFO', f"Processing subtitles for video {video.id}: {video.title}", video.id)
             
             # Extract subtitle text
             preferred_langs = self.settings['preferred_languages']
             lang, content = fetch_subtitle_text(video.url, preferred_langs)
             
             if not lang or not content:
-                # No subtitles available - mark as failed
+                # No subtitles available - this is a permanent error
                 error_msg = 'No native subtitles available'
-                self._mark_video_failed(video, error_msg)
-                self._log_error(video.id, 'WARN', error_msg)
-                return False
+                raise PermanentError(error_msg)
             
             # Save subtitle to database
             success = self._save_subtitle(video.id, lang, content)
             if not success:
                 error_msg = 'Failed to save subtitle to database'
-                self._mark_video_failed(video, error_msg)
-                self._log_error(video.id, 'ERROR', error_msg)
-                return False
+                raise Exception(error_msg)  # This will be classified as transient
             
             # Mark video as completed
             self._mark_video_completed(video)
-            self._log_info(video.id, f'Successfully extracted {lang} subtitles ({len(content)} characters)')
+            log('INFO', f'Successfully extracted {lang} subtitles ({len(content)} characters)', video.id)
             
-            logger.info(f"Successfully processed video {video.id}")
             return True
             
+        except (TransientError, PermanentError):
+            # Re-raise classified errors for proper handling by worker
+            raise
+            
         except Exception as e:
-            error_msg = f"Error processing video {video.id}: {str(e)}"
-            logger.error(error_msg)
+            # Classify unknown errors using centralized logic
+            error_class = classify_yt_dlp_error(str(e))
             
-            # Determine if error is transient or permanent
-            if is_transient_error(e):
-                # Let the queue manager handle retry logic
-                success = release_video(self.db, video.id, 'failed', str(e))
-                if success:
-                    self._log_error(video.id, 'WARN', f'Transient error, will retry: {str(e)}')
-                else:
-                    self._log_error(video.id, 'ERROR', f'Failed to requeue video: {str(e)}')
+            if error_class == PermanentError:
+                raise PermanentError(str(e)) from e
             else:
-                # Permanent error - mark as failed
-                self._mark_video_failed(video, str(e))
-                self._log_error(video.id, 'ERROR', f'Permanent error: {str(e)}')
-            
-            return False
+                raise TransientError(str(e)) from e
     
     def _save_subtitle(self, video_id: int, language: str, content: str) -> bool:
         """
@@ -121,7 +116,7 @@ class SubtitleProcessor:
                 # Update existing subtitle
                 existing.content = content
                 existing.downloaded_at = datetime.utcnow()
-                logger.info(f"Updated existing {language} subtitle for video {video_id}")
+                log('INFO', f"Updated existing {language} subtitle for video {video_id}", video_id)
             else:
                 # Create new subtitle
                 subtitle = Subtitle(
@@ -131,18 +126,18 @@ class SubtitleProcessor:
                     downloaded_at=datetime.utcnow()
                 )
                 self.db.add(subtitle)
-                logger.info(f"Created new {language} subtitle for video {video_id}")
+                log('INFO', f"Created new {language} subtitle for video {video_id}", video_id)
             
             self.db.commit()
             return True
             
         except IntegrityError as e:
             self.db.rollback()
-            logger.error(f"Database integrity error saving subtitle for video {video_id}: {str(e)}")
+            log('ERROR', f"Database integrity error saving subtitle: {str(e)}", video_id)
             return False
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Error saving subtitle for video {video_id}: {str(e)}")
+            log('ERROR', f"Error saving subtitle: {str(e)}", video_id)
             return False
     
     def _mark_video_completed(self, video: Video):
@@ -151,51 +146,15 @@ class SubtitleProcessor:
             video.status = 'completed'
             video.completed_at = datetime.utcnow()
             self.db.commit()
-            logger.debug(f"Marked video {video.id} as completed")
+            log('INFO', f"Marked video as completed", video.id)
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Error marking video {video.id} as completed: {str(e)}")
+            log_exception(video.id, e)
             raise
-    
-    def _mark_video_failed(self, video: Video, error_message: str):
-        """Mark video as failed"""
-        try:
-            video.status = 'failed'
-            video.last_error = error_message
-            video.attempts += 1
-            self.db.commit()
-            logger.debug(f"Marked video {video.id} as failed: {error_message}")
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Error marking video {video.id} as failed: {str(e)}")
-            raise
-    
-    def _log_info(self, video_id: int, message: str):
-        """Log info message"""
-        self._log_message(video_id, 'INFO', message)
-    
-    def _log_error(self, video_id: int, level: str, message: str):
-        """Log error message"""
-        self._log_message(video_id, level, message)
-    
-    def _log_message(self, video_id: int, level: str, message: str):
-        """Log message to database"""
-        try:
-            log_entry = Log(
-                video_id=video_id,
-                level=level,
-                message=message,
-                timestamp=datetime.utcnow()
-            )
-            self.db.add(log_entry)
-            self.db.commit()
-        except Exception as e:
-            self.db.rollback()
-            logger.error(f"Error logging message: {str(e)}")
 
 def process_video_subtitles(video: Video, db: Session) -> bool:
     """
-    Standalone function to process video subtitles.
+    Standalone function to process video subtitles with centralized error handling.
     
     Args:
         video: Video object to process

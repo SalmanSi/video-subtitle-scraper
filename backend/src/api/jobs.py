@@ -1,16 +1,20 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
 from typing import List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
+import json
+import asyncio
+import logging
 
-from db.models import Job, Setting, get_db
+from db.models import Job, Setting, Log, Video, get_db
 from utils.queue_manager import (
     get_queue_statistics,
     reset_processing_videos,
     reconcile_video_statuses,
     cleanup_old_logs
 )
+from utils.error_handler import get_recent_errors
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -44,12 +48,147 @@ class SettingsUpdate(BaseModel):
     backoff_factor: Optional[float] = None
     output_dir: Optional[str] = None
 
+class LogEntry(BaseModel):
+    id: int
+    video_id: Optional[int]
+    level: str
+    message: str
+    timestamp: str
+
+class LogsResponse(BaseModel):
+    logs: List[LogEntry]
+    total: int
+    level_filter: Optional[str]
+
 class QueueStatsResponse(BaseModel):
     pending: int
     processing: int
     completed: int
     failed: int
     total: int
+
+class WorkerInfo(BaseModel):
+    name: str
+    video_id: Optional[int] = None
+    since: Optional[datetime] = None
+    status: str = "idle"
+
+class RecentError(BaseModel):
+    video_id: Optional[int] = None
+    message: str
+    timestamp: datetime
+
+class RealTimeJobStatus(BaseModel):
+    status: str
+    active_workers: int
+    pending: int
+    processing: int
+    completed: int
+    failed: int
+    throughput_per_min: float
+    workers: List[WorkerInfo]
+    recent_errors: List[RecentError]
+
+async def get_real_time_job_data(db: Session) -> dict:
+    """Get comprehensive real-time job monitoring data"""
+    try:
+        # Get current job status
+        job = db.query(Job).first()
+        if not job:
+            job = Job(status='idle', active_workers=0)
+            db.add(job)
+            db.commit()
+        
+        # Get queue statistics
+        queue_stats = get_queue_statistics(db)
+        
+        # Get recent errors (last 20)
+        recent_errors = []
+        error_logs = db.query(Log).filter(
+            Log.level == 'ERROR'
+        ).order_by(Log.timestamp.desc()).limit(20).all()
+        
+        for log in error_logs:
+            recent_errors.append({
+                "video_id": log.video_id,
+                "message": log.message,
+                "timestamp": log.timestamp.isoformat()
+            })
+        
+        # Get processing videos (simulated workers)
+        processing_videos = db.query(Video).filter(
+            Video.status == 'processing'
+        ).limit(10).all()
+        
+        workers = []
+        for i, video in enumerate(processing_videos):
+            workers.append({
+                "name": f"worker-{i+1}",
+                "video_id": video.id,
+                "since": video.created_at.isoformat() if video.created_at else None,
+                "status": "processing"
+            })
+        
+        # Calculate throughput (completed videos in last hour)
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        completed_last_hour = db.query(Video).filter(
+            Video.status == 'completed',
+            Video.completed_at >= one_hour_ago
+        ).count()
+        throughput_per_min = completed_last_hour / 60.0
+        
+        return {
+            "status": job.status,
+            "active_workers": len(workers),
+            "pending": queue_stats.get('pending', 0),
+            "processing": queue_stats.get('processing', 0),
+            "completed": queue_stats.get('completed', 0),
+            "failed": queue_stats.get('failed', 0),
+            "throughput_per_min": round(throughput_per_min, 2),
+            "workers": workers,
+            "recent_errors": recent_errors
+        }
+        
+    except Exception as e:
+        logging.error(f"Failed to get real-time job data: {str(e)}")
+        return {
+            "status": "error",
+            "active_workers": 0,
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+            "throughput_per_min": 0.0,
+            "workers": [],
+            "recent_errors": [{"video_id": None, "message": f"Error fetching data: {str(e)}", "timestamp": datetime.now().isoformat()}]
+        }
+
+@router.websocket("/status")
+async def websocket_job_status(websocket: WebSocket):
+    """WebSocket endpoint for real-time job monitoring"""
+    await websocket.accept()
+    
+    try:
+        while True:
+            # Get fresh database session for each update
+            db = next(get_db())
+            try:
+                data = await get_real_time_job_data(db)
+                await websocket.send_text(json.dumps(data))
+            finally:
+                db.close()
+            
+            # Send updates every second
+            await asyncio.sleep(1)
+            
+    except WebSocketDisconnect:
+        logging.info("WebSocket client disconnected from job status monitoring")
+    except Exception as e:
+        logging.error(f"WebSocket error in job status monitoring: {str(e)}")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 @router.get("/status", response_model=JobStatusResponse)
 async def get_job_status(db: Session = Depends(get_db)):
@@ -321,6 +460,55 @@ async def cleanup_logs(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to cleanup logs: {str(e)}")
+
+@router.get("/logs", response_model=LogsResponse)
+async def get_logs(
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of logs to return"),
+    level: Optional[str] = Query(None, description="Filter by log level (INFO, WARN, ERROR)"),
+    video_id: Optional[int] = Query(None, description="Filter by video ID"),
+    db: Session = Depends(get_db)
+):
+    """Get system logs with optional filtering for dashboard debugging"""
+    try:
+        # Validate level parameter
+        if level and level.upper() not in ['INFO', 'WARN', 'ERROR']:
+            raise HTTPException(status_code=400, detail="level must be one of: INFO, WARN, ERROR")
+        
+        # Build query with filters
+        query = db.query(Log)
+        
+        if level:
+            query = query.filter(Log.level == level.upper())
+        
+        if video_id:
+            query = query.filter(Log.video_id == video_id)
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply ordering and limit
+        logs = query.order_by(Log.timestamp.desc()).limit(limit).all()
+        
+        # Convert to response format
+        log_entries = [
+            LogEntry(
+                id=log.id,
+                video_id=log.video_id,
+                level=log.level,
+                message=log.message,
+                timestamp=log.timestamp.isoformat()
+            )
+            for log in logs
+        ]
+        
+        return LogsResponse(
+            logs=log_entries,
+            total=total,
+            level_filter=level
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get logs: {str(e)}")
 
 # Worker Management Endpoints for Task 1-4 Parallel Scraping
 @router.post("/workers/start")

@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import Link from 'next/link';
 import BatchDownloadButton from './BatchDownloadButton';
 
 interface Video {
     id: number;
     title: string;
     status: string;
+    attempts: number;
     last_error?: string;
     url: string;
+    channel_id: number;
+    completed_at?: string;
+    created_at: string;
 }
 
 interface VideoQueueProps {
@@ -19,6 +24,8 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
     const [videos, setVideos] = useState<Video[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [statusFilter, setStatusFilter] = useState<string>('all');
+    const [bulkRetrying, setBulkRetrying] = useState(false);
 
     useEffect(() => {
         fetchVideos();
@@ -46,6 +53,24 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
         }
     };
 
+    const handleBulkRetry = async () => {
+        setBulkRetrying(true);
+        try {
+            const failedVideos = videos.filter(v => v.status === 'failed');
+            // Retry all failed videos
+            const retryPromises = failedVideos.map(video => 
+                axios.post(`/api/videos/${video.id}/retry`)
+            );
+            await Promise.all(retryPromises);
+            // Refresh the video list after bulk retry
+            await fetchVideos();
+        } catch (error) {
+            console.error('Error in bulk retry:', error);
+        } finally {
+            setBulkRetrying(false);
+        }
+    };
+
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'completed':
@@ -59,7 +84,13 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
         }
     };
 
+    // Filter videos based on status filter
+    const filteredVideos = statusFilter === 'all' 
+        ? videos 
+        : videos.filter(video => video.status === statusFilter);
+
     const completedCount = videos.filter(video => video.status === 'completed').length;
+    const failedCount = videos.filter(video => video.status === 'failed').length;
 
     if (loading) {
         return (
@@ -82,19 +113,51 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
     return (
         <div className="video-queue">
             <div className="queue-header">
-                <h2>Video Queue ({videos.length} videos)</h2>
+                <h2>Video Queue ({filteredVideos.length} of {videos.length} videos)</h2>
                 
-                {/* Batch Download Button */}
-                <BatchDownloadButton
-                    channelId={channelId}
-                    channelName={channelName}
-                    completedVideoCount={completedCount}
-                />
+                {/* Controls */}
+                <div className="queue-controls">
+                    {/* Status Filter */}
+                    <select 
+                        value={statusFilter} 
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="status-filter"
+                    >
+                        <option value="all">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="processing">Processing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+
+                    {/* Bulk Retry Button */}
+                    {failedCount > 0 && (
+                        <button 
+                            onClick={handleBulkRetry}
+                            disabled={bulkRetrying}
+                            className="bulk-retry-btn"
+                        >
+                            {bulkRetrying ? '🔄 Retrying...' : `🔄 Retry All Failed (${failedCount})`}
+                        </button>
+                    )}
+
+                    {/* Batch Download Button */}
+                    <BatchDownloadButton
+                        channelId={channelId}
+                        channelName={channelName}
+                        completedVideoCount={completedCount}
+                    />
+                </div>
             </div>
 
-            {videos.length === 0 ? (
+            {filteredVideos.length === 0 ? (
                 <div className="no-videos">
-                    <p>No videos found for this channel.</p>
+                    <p>
+                        {statusFilter === 'all' 
+                            ? 'No videos found for this channel.' 
+                            : `No ${statusFilter} videos found.`
+                        }
+                    </p>
                 </div>
             ) : (
                 <div className="queue-table-container">
@@ -103,12 +166,13 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                             <tr>
                                 <th>Title</th>
                                 <th>Status</th>
-                                <th>Error</th>
+                                <th>Attempts</th>
+                                <th>Last Error</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {videos.map(video => (
+                            {filteredVideos.map(video => (
                                 <tr key={video.id}>
                                     <td className="title-cell">
                                         <div className="video-title" title={video.title}>
@@ -123,11 +187,14 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                                             {video.status}
                                         </span>
                                     </td>
+                                    <td className="attempts-cell">
+                                        {video.attempts}
+                                    </td>
                                     <td className="error-cell">
                                         {video.last_error ? (
                                             <span className="error-text" title={video.last_error}>
-                                                {video.last_error.length > 50 
-                                                    ? `${video.last_error.substring(0, 50)}...` 
+                                                {video.last_error.length > 30 
+                                                    ? `${video.last_error.substring(0, 30)}...` 
                                                     : video.last_error
                                                 }
                                             </span>
@@ -146,22 +213,30 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                                                 </button>
                                             )}
                                             {video.status === 'completed' && (
-                                                <button 
-                                                    onClick={() => {
-                                                        window.open(`/api/subtitles/videos/${video.id}/download`, '_blank');
-                                                    }}
-                                                    className="download-btn"
-                                                >
-                                                    📥 Download
-                                                </button>
+                                                <>
+                                                    <Link 
+                                                        href={`/videos/${video.id}/subtitles`}
+                                                        className="view-subtitles-btn"
+                                                    >
+                                                        👁️ View Subtitles
+                                                    </Link>
+                                                    <button 
+                                                        onClick={() => {
+                                                            window.open(`/api/subtitles/videos/${video.id}/download`, '_blank');
+                                                        }}
+                                                        className="download-btn"
+                                                    >
+                                                        📥 Download
+                                                    </button>
+                                                </>
                                             )}
                                             <a 
                                                 href={video.url} 
                                                 target="_blank" 
                                                 rel="noopener noreferrer"
-                                                className="view-btn"
+                                                className="view-video-btn"
                                             >
-                                                🔗 View
+                                                🔗 Video
                                             </a>
                                         </div>
                                     </td>
@@ -180,7 +255,7 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                 .queue-header {
                     display: flex;
                     justify-content: space-between;
-                    align-items: center;
+                    align-items: flex-start;
                     margin-bottom: 24px;
                     flex-wrap: wrap;
                     gap: 16px;
@@ -189,6 +264,52 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                 .queue-header h2 {
                     margin: 0;
                     color: #111827;
+                }
+
+                .queue-controls {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    flex-wrap: wrap;
+                }
+
+                .status-filter {
+                    padding: 8px 12px;
+                    border: 1px solid #d1d5db;
+                    border-radius: 6px;
+                    background: white;
+                    font-size: 14px;
+                    min-width: 120px;
+                }
+
+                .status-filter:focus {
+                    outline: none;
+                    border-color: #2563eb;
+                    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+                }
+
+                .bulk-retry-btn {
+                    padding: 8px 16px;
+                    border: none;
+                    border-radius: 6px;
+                    background: #f59e0b;
+                    color: white;
+                    font-size: 14px;
+                    font-weight: 500;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+
+                .bulk-retry-btn:hover:not(:disabled) {
+                    background: #d97706;
+                }
+
+                .bulk-retry-btn:disabled {
+                    opacity: 0.6;
+                    cursor: not-allowed;
                 }
 
                 .loading-container, .error-container {
@@ -265,6 +386,13 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                     letter-spacing: 0.5px;
                 }
 
+                .attempts-cell {
+                    text-align: center;
+                    font-weight: 500;
+                    color: #374151;
+                    width: 80px;
+                }
+
                 .error-cell {
                     max-width: 200px;
                 }
@@ -280,19 +408,19 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                 }
 
                 .actions-cell {
-                    width: 200px;
+                    width: 250px;
                 }
 
                 .action-buttons {
                     display: flex;
-                    gap: 8px;
+                    gap: 6px;
                     flex-wrap: wrap;
                 }
 
-                .retry-btn, .download-btn, .view-btn {
+                .retry-btn, .download-btn, .view-subtitles-btn, .view-video-btn {
                     padding: 4px 8px;
                     border-radius: 4px;
-                    font-size: 12px;
+                    font-size: 11px;
                     text-decoration: none;
                     cursor: pointer;
                     border: none;
@@ -300,6 +428,7 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                     display: inline-flex;
                     align-items: center;
                     gap: 4px;
+                    white-space: nowrap;
                 }
 
                 .retry-btn {
@@ -320,12 +449,21 @@ const VideoQueue: React.FC<VideoQueueProps> = ({ channelId, channelName = '' }) 
                     background: #059669;
                 }
 
-                .view-btn {
+                .view-subtitles-btn {
+                    background: #3b82f6;
+                    color: white;
+                }
+
+                .view-subtitles-btn:hover {
+                    background: #2563eb;
+                }
+
+                .view-video-btn {
                     background: #f3f4f6;
                     color: #374151;
                 }
 
-                .view-btn:hover {
+                .view-video-btn:hover {
                     background: #e5e7eb;
                 }
 
