@@ -348,9 +348,11 @@ def classify_yt_dlp_error(error_message: str) -> type:
         'deleted',
         'no such file',
         'age restricted',
+        'no subtitles available',
         'no native subtitles',
         'subtitles not available',
-        'invalid url'
+        'invalid url',
+        'unknown video id'
     ]
     
     # Transient errors (should retry)

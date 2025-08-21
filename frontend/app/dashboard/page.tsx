@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import ChannelProgress from '../components/ChannelProgress';
 
 interface Channel {
     id: number;
@@ -191,6 +192,32 @@ const Dashboard: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Loading Channels Progress */}
+            {channels.some(ch => ch.name === 'Loading...' || ch.name?.includes('Loading')) && (
+                <div className="loading-channels-section">
+                    <h2>Channel Ingestion Progress</h2>
+                    <div className="loading-channels">
+                        {channels
+                            .filter(ch => ch.name === 'Loading...' || ch.name?.includes('Loading') || ch.total_videos === 0)
+                            .map(channel => (
+                                <ChannelProgress 
+                                    key={channel.id}
+                                    channelId={channel.id}
+                                    onComplete={() => {
+                                        // Refresh channels when ingestion completes
+                                        fetchChannels();
+                                    }}
+                                    onError={(error) => {
+                                        console.error('Channel ingestion error:', error);
+                                        fetchChannels();
+                                    }}
+                                />
+                            ))
+                        }
+                    </div>
+                </div>
+            )}
 
             {/* Channels List */}
             <div className="channels-section">
@@ -395,6 +422,36 @@ const Dashboard: React.FC = () => {
 
                 .retry-btn:hover {
                     background: #dc2626;
+                }
+
+                /* Loading Channels Section */
+                .loading-channels-section {
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 24px;
+                    margin-bottom: 32px;
+                }
+
+                .loading-channels-section h2 {
+                    margin: 0 0 20px 0;
+                    color: #1e293b;
+                    font-size: 20px;
+                    font-weight: 600;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
+                .loading-channels-section h2::before {
+                    content: '⏳';
+                    font-size: 18px;
+                }
+
+                .loading-channels {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 16px;
                 }
 
                 .global-stats {

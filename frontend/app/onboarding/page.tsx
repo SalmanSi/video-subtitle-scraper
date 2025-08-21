@@ -3,12 +3,14 @@
 import React, { useState, useCallback } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
+import ChannelProgress from '../components/ChannelProgress';
 
 interface Row {
   url: string;
   status: 'pending' | 'validating' | 'adding' | 'added' | 'exists' | 'error';
   info?: any;
   error?: string;
+  channelId?: number;  // Track channel ID for progress monitoring
 }
 
 // Base patterns for different accepted YouTube URL forms (channel handle, channel id, custom, user, video, playlist, short).
@@ -39,6 +41,7 @@ const OnboardingPage: React.FC = () => {
   const [showOnlyErrors, setShowOnlyErrors] = useState(false);
   const [confirmLarge, setConfirmLarge] = useState(false);
   const [summary, setSummary] = useState<{added:number; exists:number; errors:number}>({added:0, exists:0, errors:0});
+  const [addedChannelIds, setAddedChannelIds] = useState<number[]>([]);
 
   const backendBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8004').replace(/\/$/, '');
 
@@ -81,6 +84,22 @@ const OnboardingPage: React.FC = () => {
         // Decide if already exists vs added (backend might return a message or same channel) - naive check by response
         row.status = 'added';
         row.info = res.data;
+        
+        // Track newly added channels for progress monitoring
+        if (res.data && res.data.channels_created > 0) {
+          // We need to get the channel ID - let's fetch it
+          try {
+            const channelsRes = await axios.get(`${backendBase}/api/channels/`);
+            const latestChannel = channelsRes.data.find((ch: any) => ch.url === row.url);
+            if (latestChannel) {
+              row.channelId = latestChannel.id;
+              setAddedChannelIds(prev => [...prev, latestChannel.id]);
+            }
+          } catch (e) {
+            console.warn('Could not fetch channel ID for progress tracking');
+          }
+        }
+        
         added++;
       } catch (e: any) {
         if (e?.response?.status === 400 || e?.response?.status === 409) {
@@ -139,87 +158,92 @@ const OnboardingPage: React.FC = () => {
   const filteredRows = showOnlyErrors ? rows.filter(r=>['error','exists'].includes(r.status)) : rows;
 
   return (
-    <div style={{maxWidth:'1200px', margin:'0 auto', padding:'24px', fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'}}>
-      <div style={{textAlign:'center', marginBottom:'32px'}}>
-        <h1 style={{margin:0, fontSize:'2.5rem', color:'#111827'}}>Add Channels</h1>
-        <p style={{color:'#6b7280', fontSize:'1.05rem', margin:'8px 0 0'}}>Paste one or multiple YouTube channel URLs (comma or newline separated)</p>
+    <div className="onboarding-container">
+      <div className="header-section">
+        <h1>Add Channels</h1>
+        <p>Paste one or multiple YouTube channel URLs (comma or newline separated)</p>
       </div>
 
-      <div style={{display:'flex', gap:'24px', flexWrap:'wrap'}}>
-        <div style={{flex:'1 1 480px', minWidth:'360px'}}>
+      <div className="main-content">
+        <div className="input-section">
           <textarea
             value={input}
             onChange={e=>setInput(e.target.value)}
             placeholder={'https://www.youtube.com/@veritasium\nhttps://www.youtube.com/@Kurzgesagt'}
             rows={12}
-            style={{width:'100%', padding:'16px', border:'1px solid #e5e7eb', borderRadius:'12px', fontSize:'14px', fontFamily:'monospace', resize:'vertical'}}
+            className="url-textarea"
             disabled={inProgress}
           />
-          <div style={{display:'flex', justifyContent:'space-between', marginTop:'12px', alignItems:'center', flexWrap:'wrap', gap:'12px'}}>
-            <div style={{fontSize:'12px', color:'#6b7280'}}>
+          <div className="input-controls">
+            <div className="url-counter">
               {parseInput(input).length} unique URL(s)
             </div>
-            <div style={{display:'flex', gap:'12px'}}>
-              <label style={{fontSize:'12px', display:'flex', alignItems:'center', gap:'4px', cursor:'pointer'}}>
-                <input type="checkbox" checked={showOnlyErrors} onChange={e=>setShowOnlyErrors(e.target.checked)} />
+            <div className="controls-right">
+              <label className="error-filter">
+                <input 
+                  type="checkbox" 
+                  checked={showOnlyErrors} 
+                  onChange={e=>setShowOnlyErrors(e.target.checked)}
+                  className="filter-checkbox"
+                />
                 Show only errors
               </label>
               <button
                 onClick={startIngestion}
                 disabled={inProgress || parseInput(input).length===0}
-                style={{background:'#2563eb', color:'white', border:'none', padding:'10px 18px', borderRadius:'8px', fontWeight:600, cursor: inProgress?'not-allowed':'pointer'}}
+                className={`ingest-btn ${inProgress ? 'loading' : ''}`}
               >
                 {inProgress ? 'Ingesting...' : 'Ingest'}
               </button>
             </div>
           </div>
           {confirmLarge && !inProgress && (
-            <div style={{marginTop:'12px', background:'#fef3c7', border:'1px solid #fcd34d', padding:'12px 16px', borderRadius:'8px', fontSize:'12px', color:'#92400e'}}>
+            <div className="large-batch-warning">
               Large batch ({parseInput(input).length} URLs). Click Ingest again to confirm.
             </div>
           )}
 
           {summary.added+summary.exists+summary.errors>0 && (
-            <div style={{marginTop:'16px', display:'flex', gap:'12px', flexWrap:'wrap', fontSize:'12px'}}>
-              <span style={{background:'#ecfdf5', color:'#065f46', padding:'4px 8px', borderRadius:'6px'}}>Added: {summary.added}</span>
-              <span style={{background:'#eff6ff', color:'#1e3a8a', padding:'4px 8px', borderRadius:'6px'}}>Exists: {summary.exists}</span>
-              <span style={{background:'#fef2f2', color:'#991b1b', padding:'4px 8px', borderRadius:'6px'}}>Errors: {summary.errors}</span>
+            <div className="summary-stats">
+              <span className="stat-added">Added: {summary.added}</span>
+              <span className="stat-exists">Exists: {summary.exists}</span>
+              <span className="stat-errors">Errors: {summary.errors}</span>
             </div>
           )}
 
-          <div style={{marginTop:'24px'}}>
-            <Link href="/dashboard" style={{color:'#2563eb', textDecoration:'underline', fontSize:'14px'}}>Go to Dashboard →</Link>
+          <div className="dashboard-link">
+            <Link href="/dashboard" className="nav-link">Go to Dashboard →</Link>
           </div>
         </div>
 
-        <div style={{flex:'1 1 600px', minWidth:'420px'}}>
-          <h2 style={{margin:'0 0 16px 0', fontSize:'1.25rem', color:'#111827'}}>Progress</h2>
-          <div style={{border:'1px solid #e5e7eb', borderRadius:'12px', overflow:'hidden'}}>
-            <table style={{width:'100%', borderCollapse:'collapse', fontSize:'13px'}}>
-              <thead style={{background:'#f9fafb'}}>
+        <div className="progress-section">
+          <h2 className="progress-title">Progress</h2>
+          <div className="progress-table-container">
+            <table className="progress-table">
+              <thead>
                 <tr>
-                  <th style={{textAlign:'left', padding:'10px 12px', fontWeight:600, color:'#374151'}}>URL</th>
-                  <th style={{textAlign:'left', padding:'10px 12px', fontWeight:600, color:'#374151', width:'120px'}}>Status</th>
-                  <th style={{textAlign:'left', padding:'10px 12px', fontWeight:600, color:'#374151', width:'160px'}}>Action</th>
+                  <th className="url-header">URL</th>
+                  <th className="status-header">Status</th>
+                  <th className="action-header">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={3} style={{padding:'24px', textAlign:'center', color:'#6b7280', fontStyle:'italic'}}>No rows</td>
+                    <td colSpan={3} className="empty-row">No rows</td>
                   </tr>
                 ) : filteredRows.map(r => (
-                  <tr key={r.url} style={{borderTop:'1px solid #f3f4f6'}}>
-                    <td style={{padding:'8px 12px', wordBreak:'break-all'}}>{r.url}</td>
-                    <td style={{padding:'8px 12px'}}>
+                  <tr key={r.url} className="progress-row">
+                    <td className="url-cell">{r.url}</td>
+                    <td className="status-cell">
                       <StatusPill row={r} />
-                      {r.error && <div style={{color:'#991b1b', fontSize:'11px', marginTop:'4px'}}>{r.error}</div>}
+                      {r.error && <div className="error-details">{r.error}</div>}
                     </td>
-                    <td style={{padding:'8px 12px'}}>
+                    <td className="action-cell">
                       {['error','exists'].includes(r.status) && (
                         <button
                           onClick={()=>retryRow(r)}
-                          style={{background:'#2563eb', color:'white', border:'none', padding:'6px 12px', borderRadius:'6px', fontSize:'12px', cursor:'pointer'}}
+                          className="retry-btn"
                         >Retry</button>
                       )}
                     </td>
@@ -231,12 +255,453 @@ const OnboardingPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Channel Progress Monitoring */}
+      {addedChannelIds.length > 0 && (
+        <div className="channel-progress-section">
+          <h3 className="progress-section-title">
+            🚀 Channel Ingestion Progress
+          </h3>
+          <p className="progress-section-description">
+            Your channels are being processed in the background. Video metadata is being discovered and queued for subtitle extraction.
+          </p>
+          <div className="progress-list">
+            {addedChannelIds.map(channelId => (
+              <ChannelProgress 
+                key={channelId}
+                channelId={channelId}
+                onComplete={() => {
+                  console.log(`Channel ${channelId} ingestion completed`);
+                }}
+                onError={(error) => {
+                  console.error(`Channel ${channelId} ingestion failed:`, error);
+                }}
+              />
+            ))}
+          </div>
+          <div className="next-steps">
+            💡 <strong>Next Step:</strong> Once ingestion completes, go to the <Link href="/monitor" className="inline-link">Job Monitor</Link> to start processing subtitles, or visit the <Link href="/dashboard" className="inline-link">Dashboard</Link> to see your channels.
+          </div>
+        </div>
+      )}
+
       <style jsx>{`
+        .onboarding-container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 24px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .header-section {
+          text-align: center;
+          margin-bottom: 32px;
+        }
+
+        .header-section h1 {
+          margin: 0;
+          font-size: 2.5rem;
+          color: #111827;
+          font-weight: 700;
+        }
+
+        .header-section p {
+          color: #6b7280;
+          font-size: 1.05rem;
+          margin: 8px 0 0;
+        }
+
+        .main-content {
+          display: flex;
+          gap: 24px;
+          flex-wrap: wrap;
+        }
+
+        .input-section {
+          flex: 1 1 480px;
+          min-width: 360px;
+        }
+
+        .url-textarea {
+          width: 100%;
+          padding: 16px;
+          border: 2px solid #e5e7eb;
+          border-radius: 12px;
+          font-size: 14px;
+          font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+          resize: vertical;
+          background: white;
+          transition: all 0.2s ease;
+          line-height: 1.5;
+        }
+
+        .url-textarea:focus {
+          outline: none;
+          border-color: #2563eb;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .url-textarea:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          background: #f9fafb;
+        }
+
+        .url-textarea::placeholder {
+          color: #9ca3af;
+        }
+
+        .input-controls {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 12px;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 12px;
+        }
+
+        .url-counter {
+          font-size: 12px;
+          color: #6b7280;
+          font-weight: 500;
+        }
+
+        .controls-right {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+        }
+
+        .error-filter {
+          font-size: 12px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          color: #374151;
+          font-weight: 500;
+        }
+
+        .filter-checkbox {
+          width: 14px;
+          height: 14px;
+          accent-color: #2563eb;
+        }
+
+        .ingest-btn {
+          background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+          color: white;
+          border: none;
+          padding: 10px 18px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+        }
+
+        .ingest-btn:hover:not(:disabled) {
+          background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+          box-shadow: 0 4px 8px rgba(37, 99, 235, 0.3);
+          transform: translateY(-1px);
+        }
+
+        .ingest-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .ingest-btn.loading {
+          position: relative;
+          color: transparent;
+        }
+
+        .ingest-btn.loading::after {
+          content: '';
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          width: 16px;
+          height: 16px;
+          border: 2px solid transparent;
+          border-top: 2px solid currentColor;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+          transform: translate(-50%, -50%);
+          color: white;
+        }
+
+        .large-batch-warning {
+          margin-top: 12px;
+          background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+          border: 1px solid #fbbf24;
+          padding: 12px 16px;
+          border-radius: 8px;
+          font-size: 12px;
+          color: #92400e;
+          font-weight: 500;
+        }
+
+        .summary-stats {
+          margin-top: 16px;
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          font-size: 12px;
+        }
+
+        .stat-added {
+          background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+          color: #065f46;
+          padding: 6px 12px;
+          border-radius: 6px;
+          border: 1px solid #a7f3d0;
+          font-weight: 600;
+        }
+
+        .stat-exists {
+          background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+          color: #1e40af;
+          padding: 6px 12px;
+          border-radius: 6px;
+          border: 1px solid #93c5fd;
+          font-weight: 600;
+        }
+
+        .stat-errors {
+          background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+          color: #991b1b;
+          padding: 6px 12px;
+          border-radius: 6px;
+          border: 1px solid #fecaca;
+          font-weight: 600;
+        }
+
+        .dashboard-link {
+          margin-top: 24px;
+        }
+
+        .nav-link {
+          color: #2563eb;
+          text-decoration: none;
+          font-size: 14px;
+          font-weight: 600;
+          transition: color 0.2s ease;
+        }
+
+        .nav-link:hover {
+          color: #1d4ed8;
+          text-decoration: underline;
+        }
+
+        .progress-section {
+          flex: 1 1 600px;
+          min-width: 420px;
+        }
+
+        .progress-title {
+          margin: 0 0 16px 0;
+          font-size: 1.25rem;
+          color: #111827;
+          font-weight: 600;
+        }
+
+        .progress-table-container {
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .progress-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+          background: white;
+        }
+
+        .progress-table thead {
+          background: #f9fafb;
+        }
+
+        .url-header, .status-header, .action-header {
+          text-align: left;
+          padding: 12px;
+          font-weight: 600;
+          color: #374151;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-size: 11px;
+        }
+
+        .status-header {
+          width: 120px;
+        }
+
+        .action-header {
+          width: 160px;
+        }
+
+        .empty-row {
+          padding: 24px;
+          text-align: center;
+          color: #6b7280;
+          font-style: italic;
+        }
+
+        .progress-row {
+          border-top: 1px solid #f3f4f6;
+          transition: background-color 0.15s ease;
+        }
+
+        .progress-row:hover {
+          background: #f9fafb;
+        }
+
+        .url-cell, .status-cell, .action-cell {
+          padding: 12px;
+          vertical-align: top;
+        }
+
+        .url-cell {
+          word-break: break-all;
+          font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+          font-size: 12px;
+        }
+
+        .error-details {
+          color: #991b1b;
+          font-size: 11px;
+          margin-top: 4px;
+          font-weight: 500;
+        }
+
+        .retry-btn {
+          background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+          color: white;
+          border: none;
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 12px;
+          cursor: pointer;
+          font-weight: 600;
+          transition: all 0.2s ease;
+          box-shadow: 0 1px 3px rgba(37, 99, 235, 0.2);
+        }
+
+        .retry-btn:hover {
+          background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+          box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+          transform: translateY(-1px);
+        }
+
+        .channel-progress-section {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          padding: 24px;
+          margin-top: 24px;
+        }
+
+        .progress-section-title {
+          margin: 0 0 20px 0;
+          color: #1e293b;
+          font-size: 18px;
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .progress-section-description {
+          margin: 0 0 16px 0;
+          color: #64748b;
+          font-size: 14px;
+          line-height: 1.5;
+        }
+
+        .progress-list {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .next-steps {
+          margin-top: 16px;
+          padding: 12px;
+          background: #eff6ff;
+          border: 1px solid #bfdbfe;
+          border-radius: 8px;
+          font-size: 14px;
+          color: #1e40af;
+          line-height: 1.5;
+        }
+
+        .inline-link {
+          color: #1d4ed8;
+          text-decoration: underline;
+          font-weight: 600;
+        }
+
+        .inline-link:hover {
+          color: #1e40af;
+        }
+
+        @keyframes spin {
+          0% { transform: translate(-50%, -50%) rotate(0deg); }
+          100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
         @media (max-width: 900px) {
-          table thead { display:none; }
-          table tr { display:block; border-bottom:1px solid #f3f4f6; }
-          table td { display:block; width:100%; }
-          table td:first-child { font-weight:600; }
+          .onboarding-container {
+            padding: 16px;
+          }
+
+          .header-section h1 {
+            font-size: 2rem;
+          }
+
+          .main-content {
+            flex-direction: column;
+          }
+
+          .input-section, .progress-section {
+            min-width: auto;
+          }
+
+          .input-controls {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .controls-right {
+            justify-content: space-between;
+          }
+
+          .progress-table thead {
+            display: none;
+          }
+
+          .progress-row {
+            display: block;
+            border-bottom: 1px solid #f3f4f6;
+            padding: 12px;
+          }
+
+          .url-cell, .status-cell, .action-cell {
+            display: block;
+            width: 100%;
+            padding: 4px 0;
+          }
+
+          .url-cell {
+            font-weight: 600;
+            margin-bottom: 8px;
+          }
+
+          .status-cell {
+            margin-bottom: 8px;
+          }
         }
       `}</style>
     </div>

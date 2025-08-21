@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from api import channels, videos, subtitles, jobs
 from db import models
 from utils.queue_manager import reconcile_video_statuses
@@ -9,30 +10,9 @@ import logging
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(
-    title="Video Subtitle Scraper API",
-    description="API for scraping subtitles from YouTube videos",
-    version="1.0.0"
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include the routers for each API module
-app.include_router(channels.router, prefix="/api")
-app.include_router(videos.router, prefix="/api")
-app.include_router(subtitles.router, prefix="/api")
-app.include_router(jobs.router)
-
-@app.on_event("startup")
-def startup_event():
-    """Initialize the database and recover queue state"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     try:
         # Initialize database
         models.init_db()
@@ -50,11 +30,53 @@ def startup_event():
         finally:
             db.close()
             
-        log('INFO', "Application startup and recovery completed")
+        log('INFO', "Application startup completed successfully")
         
     except Exception as e:
-        log_exception(None, e)
+        log_exception(e, "Critical error during application startup")
         raise
+    
+    yield
+    
+    # Shutdown
+    log('INFO', "Application shutdown")
+
+app = FastAPI(
+    title="Video Subtitle Scraper API",
+    description="API for scraping subtitles from YouTube videos",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include the routers for each API module
+app.include_router(channels.router, prefix="/api")
+app.include_router(videos.router, prefix="/api")
+app.include_router(subtitles.router, prefix="/api")
+app.include_router(jobs.router)
+
+# Include the routers for each API module
+app.include_router(channels.router, prefix="/api")
+app.include_router(videos.router, prefix="/api")
+app.include_router(subtitles.router, prefix="/api")
+app.include_router(jobs.router)
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {"message": "Video Subtitle Scraper API", "status": "running"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8004)
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -77,4 +99,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8004)

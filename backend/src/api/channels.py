@@ -60,6 +60,17 @@ class ChannelOutput(BaseModel):
     
     model_config = {"from_attributes": True}
 
+class ChannelIngestionStatus(BaseModel):
+    channel_id: int
+    url: str
+    name: str
+    status: str  # 'loading', 'completed', 'failed'
+    videos_found: int
+    videos_ingested: int
+    error_message: Optional[str] = None
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
 class ChannelIngestionResponse(BaseModel):
     channels_created: int
     videos_enqueued: int
@@ -78,18 +89,11 @@ def get_or_create_channel(db: Session, url: str) -> tuple[Channel, bool]:
     if channel:
         return channel, False
     
-    # Get channel info from yt-dlp
-    try:
-        channel_info = get_channel_info(url)
-        channel_name = channel_info.get('title', 'Unknown Channel')
-    except Exception as e:
-        logging.warning(f"Could not get channel name for {url}: {e}")
-        channel_name = 'Unknown Channel'
-    
-    # Create new channel
+    # Create new channel without fetching info from yt-dlp (to avoid blocking)
+    # Channel name will be updated later during background video ingestion
     channel = Channel(
         url=url,
-        name=channel_name,
+        name='Loading...',  # Placeholder name
         total_videos=0,
         created_at=datetime.utcnow()
     )
@@ -98,6 +102,126 @@ def get_or_create_channel(db: Session, url: str) -> tuple[Channel, bool]:
     db.flush()  # Get the ID without committing
     
     return channel, True
+
+def ingest_channel_videos_sync(channel_id: int, channel_url: str) -> int:
+    """
+    Synchronous version of video ingestion for use in thread executor.
+    Creates its own DB session and updates channel info.
+    
+    Returns:
+        int: Number of new videos added
+    """
+    from db.models import SessionLocal
+    
+    db = SessionLocal()
+    try:
+        # Get the channel
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            logging.error(f"Channel {channel_id} not found")
+            return 0
+        
+        logging.info(f"Starting background ingestion for channel: {channel_url}")
+        
+        # Update channel name if it's still the placeholder
+        if channel.name == 'Loading...':
+            try:
+                logging.info(f"Fetching channel metadata for: {channel_url}")
+                channel_info = get_channel_info(channel_url)
+                channel.name = channel_info.get('title', 'Unknown Channel')
+                db.commit()  # Save name update immediately
+                logging.info(f"Updated channel name to: {channel.name}")
+            except Exception as e:
+                logging.warning(f"Could not get channel name for {channel_url}: {e}")
+                channel.name = 'Unknown Channel'
+                db.commit()
+        
+        # Extract video entries
+        logging.info(f"Extracting video list for channel: {channel.name}")
+        entries = extract_video_entries(channel_url)
+        logging.info(f"Found {len(entries)} videos in channel: {channel.name}")
+        
+        new_videos = 0
+        processed_videos = 0
+        
+        for entry in entries:
+            processed_videos += 1
+            
+            # Log progress every 50 videos
+            if processed_videos % 50 == 0:
+                logging.info(f"Processing video {processed_videos}/{len(entries)} for channel: {channel.name}")
+            
+            # Get video URL
+            video_url = entry.get('webpage_url') or entry.get('url')
+            if not video_url and entry.get('id'):
+                video_url = f"https://www.youtube.com/watch?v={entry['id']}"
+            
+            if not video_url:
+                continue
+                
+            # Get video title
+            title = entry.get('title', 'Unknown Title')
+            
+            # Check if video already exists
+            existing_video = db.query(Video).filter(Video.url == video_url).first()
+            if not existing_video:
+                video = Video(
+                    channel_id=channel.id,
+                    url=video_url,
+                    title=title,
+                    status='pending',
+                    attempts=0,
+                    created_at=datetime.utcnow()
+                )
+                db.add(video)
+                new_videos += 1
+                
+                # Commit in batches of 100 to avoid large transactions
+                if new_videos % 100 == 0:
+                    db.commit()
+                    logging.info(f"Committed {new_videos} videos so far for channel: {channel.name}")
+        
+        # Final commit
+        db.commit()
+        
+        # Update channel total_videos count
+        total_videos = db.query(Video).filter(Video.channel_id == channel.id).count()
+        channel.total_videos = total_videos
+        db.commit()
+        
+        logging.info(f"✅ Ingestion COMPLETED for channel '{channel.name}': {new_videos} new videos added (total: {total_videos})")
+        return new_videos
+        
+    except Exception as e:
+        db.rollback()
+        error_msg = f"❌ Failed to ingest videos for channel {channel_url}: {str(e)}"
+        logging.error(error_msg)
+        
+        # Update channel name to indicate failure
+        try:
+            channel = db.query(Channel).filter(Channel.id == channel_id).first()
+            if channel and channel.name == 'Loading...':
+                channel.name = 'Failed to load'
+                db.commit()
+        except:
+            pass
+        
+        # Log to database
+        log_entry = Log(
+            video_id=None,
+            level='ERROR',
+            message=error_msg,
+            timestamp=datetime.utcnow()
+        )
+        db.add(log_entry)
+        try:
+            db.commit()
+        except:
+            pass
+        
+        return 0
+    finally:
+        db.close()
 
 def ingest_channel_videos(db: Session, channel: Channel) -> int:
     """
@@ -159,13 +283,50 @@ def ingest_channel_videos(db: Session, channel: Channel) -> int:
         
         raise HTTPException(status_code=400, detail=error_msg)
 
+@router.get("/{channel_id}/ingestion-status", response_model=ChannelIngestionStatus)
+async def get_channel_ingestion_status(channel_id: int, db: Session = Depends(get_db)):
+    """Get the ingestion status and progress for a channel"""
+    try:
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        
+        # Count videos for this channel
+        total_videos = db.query(Video).filter(Video.channel_id == channel_id).count()
+        
+        # Determine status based on channel name and video count
+        if channel.name == "Loading...":
+            status = "loading"
+            completed_at = None
+        elif total_videos > 0:
+            status = "completed"
+            completed_at = channel.created_at  # Approximate
+        else:
+            status = "failed"
+            completed_at = channel.created_at
+        
+        return ChannelIngestionStatus(
+            channel_id=channel.id,
+            url=channel.url,
+            name=channel.name,
+            status=status,
+            videos_found=total_videos,
+            videos_ingested=total_videos,
+            error_message=None,
+            started_at=channel.created_at,
+            completed_at=completed_at
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/", response_model=ChannelIngestionResponse)
 async def add_channel(
     channel_input: Union[ChannelInput, ChannelBulkInput],
     db: Session = Depends(get_db)
 ):
     """
-    Add one or more channels and ingest their videos.
+    Add one or more channels and return immediately. Video ingestion happens in background.
     """
     # Handle both single and bulk input
     if isinstance(channel_input, ChannelInput):
@@ -174,27 +335,32 @@ async def add_channel(
         urls = channel_input.urls
     
     channels_created = 0
-    videos_enqueued = 0
     channels_skipped = []
-    videos_existing = 0
     
     try:
+        # Process each channel - just create the channel, don't ingest videos yet
         for url in urls:
             try:
-                # Get or create channel
+                # Get or create channel (quick operation)
                 channel, is_new = get_or_create_channel(db, url)
                 
                 if not is_new:
                     channels_skipped.append(url)
-                    # Count existing videos for this channel
-                    existing_count = db.query(Video).filter(Video.channel_id == channel.id).count()
-                    videos_existing += existing_count
                 else:
                     channels_created += 1
                 
-                # Ingest videos (both new and existing channels to catch new videos)
-                new_videos = ingest_channel_videos(db, channel)
-                videos_enqueued += new_videos
+                # Schedule video ingestion in background (fire and forget)
+                import threading
+                def ingest_videos_background():
+                    try:
+                        new_videos = ingest_channel_videos_sync(channel.id, channel.url)
+                        logging.info(f"Background ingestion completed: {new_videos} videos for {url}")
+                    except Exception as e:
+                        logging.error(f"Background video ingestion failed for {url}: {e}")
+                
+                # Start background thread - don't wait for it
+                thread = threading.Thread(target=ingest_videos_background, daemon=True)
+                thread.start()
                 
             except Exception as e:
                 # Log error but continue with other channels
@@ -209,25 +375,16 @@ async def add_channel(
                 )
                 db.add(log_entry)
         
-        # Commit all changes
+        # Commit channel creations
         db.commit()
         
-        # Determine response
-        if channels_created > 0:
-            return ChannelIngestionResponse(
-                channels_created=channels_created,
-                videos_enqueued=videos_enqueued,
-                channels_skipped=channels_skipped if channels_skipped else None,
-                videos_existing=videos_existing if videos_existing > 0 else None
-            )
-        else:
-            # All channels already existed
-            return ChannelIngestionResponse(
-                channels_created=0,
-                videos_enqueued=videos_enqueued,
-                channels_skipped=channels_skipped,
-                videos_existing=videos_existing
-            )
+        # Return response immediately - videos will be ingested in background
+        return ChannelIngestionResponse(
+            channels_created=channels_created,
+            videos_enqueued=0,  # Will be populated by background process
+            channels_skipped=channels_skipped if channels_skipped else None,
+            videos_existing=None
+        )
             
     except Exception as e:
         db.rollback()

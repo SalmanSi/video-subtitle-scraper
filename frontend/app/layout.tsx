@@ -93,6 +93,21 @@ export default function RootLayout({
               >
                 🔍 Job Monitor
               </Link>
+              <Link 
+                href="/individual"
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  textDecoration: 'none',
+                  transition: 'all 0.2s ease',
+                  background: pathname === '/individual' ? '#2563eb' : 'transparent',
+                  color: pathname === '/individual' ? 'white' : '#374151'
+                }}
+              >
+                🎯 Individual Video
+              </Link>
             </div>
           </div>
         </nav>

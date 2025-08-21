@@ -218,7 +218,7 @@ async def get_job_status(db: Session = Depends(get_db)):
 
 @router.post("/start", response_model=JobControlResponse)
 async def start_jobs(db: Session = Depends(get_db)):
-    """Start job processing"""
+    """Start job processing and workers"""
     try:
         # Get or create job entry
         job = db.query(Job).first()
@@ -234,17 +234,31 @@ async def start_jobs(db: Session = Depends(get_db)):
                 queue_stats=queue_stats
             )
         
-        # Start the job
+        # Import here to avoid circular imports
+        from workers.worker import start_workers as start_subtitle_workers
+        
+        # Get default worker count from settings
+        settings = db.query(Setting).first()
+        num_workers = settings.max_workers if settings else 5
+        
+        # Start workers
+        worker_result = start_subtitle_workers(num_workers)
+        
+        if not worker_result['success']:
+            raise HTTPException(status_code=500, detail=f"Failed to start workers: {worker_result['message']}")
+        
+        # Update job status
         job.status = 'running'
         job.started_at = datetime.utcnow()
         job.stopped_at = None
+        job.active_workers = worker_result['status']['num_workers']
         db.commit()
         
         # Get updated statistics
         queue_stats = get_queue_statistics(db)
         
         return JobControlResponse(
-            message="Job processing started successfully",
+            message=f"Job processing started with {job.active_workers} workers",
             status=job.status,
             queue_stats=queue_stats
         )
@@ -289,7 +303,7 @@ async def pause_jobs(db: Session = Depends(get_db)):
 
 @router.post("/resume", response_model=JobControlResponse)
 async def resume_jobs(db: Session = Depends(get_db)):
-    """Resume job processing from paused state"""
+    """Resume job processing"""
     try:
         job = db.query(Job).first()
         if not job:
@@ -303,17 +317,31 @@ async def resume_jobs(db: Session = Depends(get_db)):
                 queue_stats=queue_stats
             )
         
+        # Import here to avoid circular imports
+        from workers.worker import start_workers as start_subtitle_workers
+        
+        # Get default worker count from settings
+        settings = db.query(Setting).first()
+        num_workers = settings.max_workers if settings else 5
+        
+        # Start workers
+        worker_result = start_subtitle_workers(num_workers)
+        
+        if not worker_result['success']:
+            raise HTTPException(status_code=500, detail=f"Failed to resume workers: {worker_result['message']}")
+        
         # Resume the job
         job.status = 'running'
         job.started_at = datetime.utcnow()
         job.stopped_at = None
+        job.active_workers = worker_result['status']['num_workers']
         db.commit()
         
         # Get updated statistics
         queue_stats = get_queue_statistics(db)
         
         return JobControlResponse(
-            message="Job processing resumed successfully",
+            message=f"Job processing resumed with {job.active_workers} workers",
             status=job.status,
             queue_stats=queue_stats
         )
@@ -321,6 +349,47 @@ async def resume_jobs(db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to resume jobs: {str(e)}")
+
+@router.post("/stop", response_model=JobControlResponse)
+async def stop_jobs(db: Session = Depends(get_db)):
+    """Stop job processing and workers"""
+    try:
+        job = db.query(Job).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="No job found")
+        
+        if job.status == 'idle':
+            queue_stats = get_queue_statistics(db)
+            return JobControlResponse(
+                message="Job processing is already stopped",
+                status=job.status,
+                queue_stats=queue_stats
+            )
+        
+        # Import here to avoid circular imports
+        from workers.worker import stop_workers
+        
+        # Stop workers
+        worker_result = stop_workers()
+        
+        # Update job status
+        job.status = 'idle'
+        job.stopped_at = datetime.utcnow()
+        job.active_workers = 0
+        db.commit()
+        
+        # Get updated statistics
+        queue_stats = get_queue_statistics(db)
+        
+        return JobControlResponse(
+            message="Job processing stopped successfully",
+            status=job.status,
+            queue_stats=queue_stats
+        )
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to stop jobs: {str(e)}")
 
 @router.post("/stop", response_model=JobControlResponse)
 async def stop_jobs(db: Session = Depends(get_db)):
