@@ -1,8 +1,8 @@
 {
   "/page": "app/page.js",
-  "/individual/page": "app/individual/page.js",
   "/dashboard/page": "app/dashboard/page.js",
   "/monitor/page": "app/monitor/page.js",
-  "/onboarding/page": "app/onboarding/page.js",
-  "/channels/[id]/page": "app/channels/[id]/page.js"
+  "/channels/[id]/page": "app/channels/[id]/page.js",
+  "/videos/[id]/subtitles/page": "app/videos/[id]/subtitles/page.js",
+  "/individual/page": "app/individual/page.js"
 }
