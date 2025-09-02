@@ -76,6 +76,7 @@ class ChannelIngestionResponse(BaseModel):
     videos_enqueued: int
     channels_skipped: Optional[List[str]] = None
     videos_existing: Optional[int] = None
+    channel_ids: Optional[List[int]] = None  # Add channel IDs for polling
 
 def get_or_create_channel(db: Session, url: str) -> tuple[Channel, bool]:
     """
@@ -176,10 +177,22 @@ def ingest_channel_videos_sync(channel_id: int, channel_url: str) -> int:
                 db.add(video)
                 new_videos += 1
                 
+                # Update total_videos count every 50 videos for real-time progress
+                if new_videos % 50 == 0:
+                    db.commit()
+                    current_total = db.query(Video).filter(Video.channel_id == channel.id).count()
+                    channel.total_videos = current_total
+                    db.commit()
+                    logging.info(f"Progress update: {new_videos} new videos added for channel: {channel.name} (total: {current_total})")
+                
                 # Commit in batches of 100 to avoid large transactions
                 if new_videos % 100 == 0:
                     db.commit()
-                    logging.info(f"Committed {new_videos} videos so far for channel: {channel.name}")
+                    # Update channel total_videos count in real-time
+                    current_total = db.query(Video).filter(Video.channel_id == channel.id).count()
+                    channel.total_videos = current_total
+                    db.commit()
+                    logging.info(f"Committed {new_videos} videos so far for channel: {channel.name} (total: {current_total})")
         
         # Final commit
         db.commit()
@@ -336,6 +349,7 @@ async def add_channel(
     
     channels_created = 0
     channels_skipped = []
+    channel_ids = []  # Track created channel IDs
     
     try:
         # Process each channel - just create the channel, don't ingest videos yet
@@ -348,6 +362,9 @@ async def add_channel(
                     channels_skipped.append(url)
                 else:
                     channels_created += 1
+                    
+                # Always add channel ID for polling (even existing ones)
+                channel_ids.append(channel.id)
                 
                 # Schedule video ingestion in background (fire and forget)
                 import threading
@@ -383,7 +400,8 @@ async def add_channel(
             channels_created=channels_created,
             videos_enqueued=0,  # Will be populated by background process
             channels_skipped=channels_skipped if channels_skipped else None,
-            videos_existing=None
+            videos_existing=None,
+            channel_ids=channel_ids
         )
             
     except Exception as e:
